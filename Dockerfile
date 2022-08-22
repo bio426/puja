@@ -13,4 +13,6 @@ COPY *.go ./
 
 RUN go build -o /out
 
-CMD ["./out"]
+EXPOSE 1323
+
+CMD ["/out"]
