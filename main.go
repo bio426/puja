@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"golang.org/x/net/websocket"
 )
 
 type alert struct {
@@ -19,12 +20,16 @@ type alert struct {
 var messageChannels = make(map[chan alert]bool)
 
 func formatEvent(event string, data string) []byte {
-	payload := "event: " + event + "\n"
+	payload := strings.Builder{}
+	payload.WriteString("id: asd\n")
+	payload.WriteString("event: " + event + "\n")
 	datalines := strings.Split(data, "\n")
 	for _, line := range datalines {
-		payload = payload + "data: " + line + "\n"
+		payload.WriteString("data: " + line + "\n")
 	}
-	return []byte(payload + "\n")
+	payload.WriteString("\n")
+
+	return []byte(payload.String())
 }
 
 func subscribe(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +77,24 @@ func publish(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok.\n"))
 }
 
+func sockets(w http.ResponseWriter, r *http.Request) {
+	websocket.Handler(func(ws *websocket.Conn) {
+		defer ws.Close()
+		for {
+			err := websocket.Message.Send(ws, "Hola manito")
+			if err != nil {
+				log.Panicf(err.Error())
+			}
+			msg := ""
+			err = websocket.Message.Receive(ws, &msg)
+			if err != nil {
+				log.Panic(err)
+			}
+			log.Printf("%s\n", msg)
+		}
+	}).ServeHTTP(w, r)
+}
+
 func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -87,6 +110,7 @@ func main() {
 		w.WriteHeader(200)
 	})
 	r.Get("/sub", subscribe)
+	r.Get("/ws", sockets)
 
 	ticker := time.NewTicker(time.Second * 5)
 	go func() {
@@ -102,6 +126,5 @@ func main() {
 	}()
 	defer ticker.Stop()
 
-	log.Println("Server started...")
 	http.ListenAndServe(":1323", r)
 }
