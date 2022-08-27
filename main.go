@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
@@ -10,12 +11,12 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-type PubBody struct {
-	Event string
-	Data  string
+type alert struct {
+	event   string
+	message string
 }
 
-var messageChannels = make(map[chan []byte]bool)
+var messageChannels = make(map[chan alert]bool)
 
 func formatEvent(event string, data string) []byte {
 	payload := "event: " + event + "\n"
@@ -28,16 +29,17 @@ func formatEvent(event string, data string) []byte {
 
 func subscribe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	currentChannel := make(chan []byte)
+	currentChannel := make(chan alert)
 	messageChannels[currentChannel] = true
 
 	for {
 		select {
-		case msg := <-currentChannel:
-			w.Write(formatEvent("message", string(msg)))
+		case incomeAlert := <-currentChannel:
+			w.Write(formatEvent(incomeAlert.event, incomeAlert.message))
 			w.(http.Flusher).Flush()
 		case <-r.Context().Done():
 			delete(messageChannels, currentChannel)
@@ -47,14 +49,24 @@ func subscribe(w http.ResponseWriter, r *http.Request) {
 }
 
 func publish(w http.ResponseWriter, r *http.Request) {
-	msg := r.FormValue("message")
-	log.Print(msg)
-	if msg == "" {
-		msg = "raaa"
+	//w.Header().Set("Access-Control-Allow-Origin", "*")
+	var body struct {
+		Event   string `json:"event"`
+		Message string `json:"message"`
 	}
+	decoder := json.NewDecoder(r.Body)
+	err := decoder.Decode(&body)
+	if err != nil {
+		panic(err)
+	}
+	if body.Message == "" {
+		body.Message = "no message"
+	}
+
 	go func() {
 		for channel := range messageChannels {
-			channel <- []byte(msg)
+			myAlert := alert{event: body.Event, message: body.Message}
+			channel <- myAlert
 		}
 	}()
 	w.Write([]byte("ok.\n"))
@@ -63,7 +75,17 @@ func publish(w http.ResponseWriter, r *http.Request) {
 func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
-	r.Get("/pub", publish)
+	r.Post("/pub", publish)
+	r.Options("/pub", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Vary", "Origin")
+		w.Header().Set("Vary", "Access-Control-Request-Method")
+		w.Header().Set("Vary", "Access-Control-Request-Headers")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Origin, Accept, token")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST,OPTIONS")
+
+		w.WriteHeader(200)
+	})
 	r.Get("/sub", subscribe)
 
 	ticker := time.NewTicker(time.Second * 5)
@@ -72,12 +94,14 @@ func main() {
 			select {
 			case time := <-ticker.C:
 				for channel := range messageChannels {
-					channel <- []byte(time.String())
+					timeAlert := alert{event: "time", message: time.String()}
+					channel <- timeAlert
 				}
 			}
 		}
 	}()
 	defer ticker.Stop()
 
+	log.Println("Server started...")
 	http.ListenAndServe(":1323", r)
 }
